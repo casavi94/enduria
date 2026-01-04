@@ -1,88 +1,84 @@
 "use client"
 
 import { useState } from "react"
-import { login, register } from "../../lib/auth"
-import { createAthleteProfile } from "../../lib/createAthleteProfile"
-
+import { useRouter } from "next/navigation"
+import { signInWithEmailAndPassword } from "firebase/auth"
+import { auth } from "@/lib/firebase"
 
 export default function LoginPage() {
+  const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   const handleLogin = async () => {
-    setError("")
-    console.log("👉 intentando login:", email)
-
-    try {
-      const user = await login(email, password)
-      console.log("✅ LOGIN OK:", user)
-      alert("Login correcto")
-    } catch (err: any) {
-      console.error("❌ LOGIN ERROR:", err)
-      setError(err.message)
-    }
-  }
-
-  const handleRegister = async () => {
-  setError("")
-  console.log("👉 intentando registro:", email)
+  setError(null)
+  setLoading(true)
 
   try {
-    const result = await register(email, password)
-    const user = result.user
+    const cleanEmail = email.trim()
+    const cleanPassword = password
 
-    console.log("✅ USUARIO AUTH CREADO:", user.uid)
+    console.log("👉 login:", cleanEmail)
 
-    await createAthleteProfile(user.uid, user.email || "")
+    const result = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword)
+    console.log("✅ LOGIN OK:", result.user.uid)
 
-    console.log("✅ PERFIL DE ATLETA CREADO")
+    router.push("/dashboard")
+  } catch (e: any) {
+    console.log("❌ LOGIN ERROR:", e?.code, e?.message)
 
-    alert("Usuario y perfil creados correctamente")
-  } catch (err: any) {
-    console.error("❌ ERROR REGISTRO:", err)
-    setError(err.message)
+    if (e?.code === "auth/invalid-credential") {
+      setError("Email o contraseña incorrectos (o ese usuario no es de tipo 'password').")
+    } else if (e?.code === "auth/user-not-found") {
+      setError("No existe ningún usuario con ese email.")
+    } else if (e?.code === "auth/wrong-password") {
+      setError("Contraseña incorrecta.")
+    } else {
+      setError(e?.message ?? "Error de login")
+    }
+  } finally {
+    setLoading(false)
   }
 }
 
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold mb-6 text-center">ENDURIA</h1>
+      <div className="w-full max-w-sm space-y-4">
+        <h1 className="text-2xl font-bold text-center">ENDURIA</h1>
 
         <input
-          className="border p-3 w-full mb-3 rounded"
-          type="email"
+          className="border p-3 w-full"
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
 
         <input
-          className="border p-3 w-full mb-4 rounded"
+          className="border p-3 w-full"
+          placeholder="Contraseña"
           type="password"
-          placeholder="Contraseña (mín. 6 caracteres)"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
 
-        {error && (
-          <p className="text-red-500 text-sm mb-3">{error}</p>
-        )}
+        {error && <p className="text-red-600 text-sm">{error}</p>}
 
         <button
-          className="w-full bg-black text-white py-3 rounded mb-2"
           onClick={handleLogin}
+          disabled={loading}
+          className="w-full bg-black text-white p-3 rounded"
         >
-          Entrar
+          {loading ? "Entrando..." : "Entrar"}
         </button>
 
         <button
-          className="w-full border py-3 rounded"
-          onClick={handleRegister}
+          onClick={() => router.push("/register")}
+          className="w-full border p-3 rounded"
         >
-          Registrarse
+          Crear cuenta
         </button>
       </div>
     </div>

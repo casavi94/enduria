@@ -2,83 +2,93 @@
 
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { onAuthStateChanged } from "firebase/auth"
 import { auth, db } from "@/lib/firebase"
-import {
-  doc,
-  getDoc,
-  updateDoc,
-  collection,
-  query,
-  where,
-  getDocs
-} from "firebase/firestore"
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore"
 
 export default function SessionDetailPage() {
-  const { id } = useParams()
+  const params = useParams()
+  const id = params?.id as string
   const router = useRouter()
+
   const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const loadSession = async () => {
-      const user = auth.currentUser
-      if (!user) return
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      try {
+        setLoading(true)
+        setError(null)
 
-      const ref = doc(db, "users", user.uid, "sessions", id as string)
-      const snap = await getDoc(ref)
+        if (!user) {
+          router.replace("/login")
+          return
+        }
 
-      if (snap.exists()) {
-        setSession(snap.data())
+        if (!id) {
+          setError("Falta el id en la URL.")
+          setSession(null)
+          return
+        }
+
+        // DEBUG (opcional): confirma UID real
+        console.log("[SessionDetail] UID:", user.uid, "ID:", id)
+
+        // 1) Leer session
+        const sessionRef = doc(db, "users", user.uid, "sessions", id)
+        const snap = await getDoc(sessionRef)
+
+        if (!snap.exists()) {
+          setSession(null)
+          setError(
+            `No se encontró la sesión en users/${user.uid}/sessions/${id}.`
+          )
+          return
+        }
+
+        const sessionData = snap.data()
+        setSession(sessionData)
+
+        // 2) Crear/actualizar workout espejo
+        const workoutRef = doc(db, "users", user.uid, "workouts", id)
+
+        await setDoc(
+          workoutRef,
+          {
+            title: sessionData.title ?? "Entreno",
+            sport: sessionData.sport ?? "run",
+            date: sessionData.date, // debe ser Timestamp
+            status: sessionData.completed ? "completed" : "planned",
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
+      } catch (e: any) {
+        setError(e?.message ?? "Error cargando sesión")
+        setSession(null)
+      } finally {
+        setLoading(false)
       }
-    }
+    })
 
-    loadSession()
-  }, [id])
+    return () => unsub()
+  }, [id, router])
 
-  const updateUserStatus = async (userId: string, week: number) => {
-    const sessionsRef = collection(db, "users", userId, "sessions")
-    const q = query(sessionsRef, where("week", "==", week))
-    const snap = await getDocs(q)
+  if (loading) return <p className="p-6">Cargando sesión...</p>
 
-    const total = snap.docs.length
-    const completed = snap.docs.filter(
-      d => d.data().completed === true
-    ).length
-
-    if (total === 0) return
-
-    const percentage = (completed / total) * 100
-
-    let status = "green"
-    if (percentage < 50) status = "red"
-    else if (percentage < 80) status = "yellow"
-
-    const userRef = doc(db, "users", userId)
-    await updateDoc(userRef, { status })
-
-    // Avanzar semana si todo está completado
-    if (completed === total) {
-      await updateDoc(userRef, {
-        currentWeek: week + 1
-      })
-    }
+  if (!session) {
+    return (
+      <div className="p-6 space-y-2">
+        <p className="font-semibold">No se encontró la sesión</p>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <p className="text-sm opacity-70">
+          Revisa que estás logueado con el mismo usuario (UID) donde creaste
+          <strong> sessions/{id}</strong>.
+        </p>
+      </div>
+    )
   }
-
-  const markAsCompleted = async () => {
-    const user = auth.currentUser
-    if (!user || !session) return
-
-    const sessionRef = doc(db, "users", user.uid, "sessions", id as string)
-
-    // Marcar sesión
-    await updateDoc(sessionRef, { completed: true })
-
-    // Recalcular estado
-    await updateUserStatus(user.uid, session.week)
-
-    router.push("/dashboard")
-  }
-
-  if (!session) return <p>Cargando sesión...</p>
 
   return (
     <div className="p-6 space-y-6">
@@ -117,19 +127,15 @@ export default function SessionDetailPage() {
       )}
 
       {/* Acción */}
-      {!session.completed && (
-        <button
-          onClick={markAsCompleted}
-          className="w-full bg-black text-white p-3 rounded"
-        >
-          Marcar sesión como completada
-        </button>
-      )}
+      <button
+        onClick={() => router.push(`/workout/${id}`)}
+        className="w-full bg-black text-white p-3 rounded"
+      >
+        Abrir detalle y registrar check-in
+      </button>
 
       {session.completed && (
-        <p className="text-green-600 font-semibold">
-          ✅ Sesión completada
-        </p>
+        <p className="text-green-600 font-semibold">✅ Sesión completada</p>
       )}
     </div>
   )
