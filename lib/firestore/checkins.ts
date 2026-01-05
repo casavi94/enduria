@@ -13,8 +13,10 @@ import type { CheckIn, WorkoutStatus } from "@/lib/types/workout"
 import { deepClean } from "@/lib/firestore/clean"
 
 /**
- * Guarda un check-in post-entreno y actualiza el estado del workout
- * + compatibilidad: actualiza sessions/{id}.completed
+ * Guarda un check-in post-entreno y actualiza:
+ * - workout.status
+ * - workout.lastCheckinSummary + workout.lastCheckinAt (para dashboard instantáneo)
+ * - sessions.completed (compatibilidad legacy)
  */
 export async function saveCheckIn(params: {
   uid: string
@@ -38,19 +40,33 @@ export async function saveCheckIn(params: {
 
   await setDoc(ref, payload)
 
-  // 2) Crear/actualizar workout (si no existe, se crea) ✅
+  // 2) Actualizar workout (merge) + lastCheckinSummary
   const workoutRef = doc(db, "users", uid, "workouts", workoutId)
+
+  const lastCheckinSummary = deepClean({
+    rpe: checkin.rpe,
+    fatigue: checkin.fatigue,
+    pain: {
+      hasPain: checkin.pain?.hasPain ?? false,
+      intensity: checkin.pain?.intensity,
+      area: checkin.pain?.area,
+    },
+  })
+
   await setDoc(
     workoutRef,
-    {
+    deepClean({
       status: checkin.status as WorkoutStatus,
       updatedAt: serverTimestamp(),
-    },
+
+      // ✅ nuevo: dashboard instantáneo
+      lastCheckinSummary,
+      lastCheckinAt: serverTimestamp(),
+    }),
     { merge: true }
   )
 
-  // 3) Compatibilidad con el sistema antiguo (sessions)
-  // Si el check-in está completed o modified => session.completed = true
+  // 3) Compatibilidad con sessions (legacy)
   const legacySessionRef = doc(db, "users", uid, "sessions", workoutId)
   await setDoc(
     legacySessionRef,
@@ -65,7 +81,7 @@ export async function saveCheckIn(params: {
 }
 
 /**
- * Obtiene el último check-in de un workout
+ * Obtiene el último check-in de un workout (por si lo necesitas en detalle)
  */
 export async function getLatestCheckIn(params: {
   uid: string

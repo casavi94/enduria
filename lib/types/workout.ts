@@ -83,4 +83,20 @@ export type Workout = {
   // Estado
   status: WorkoutStatus
   updatedAt: any // Firestore Timestamp
+
+  lastCheckinSummary?: LastCheckinSummary
+  lastCheckinAt?: any // Firestore Timestamp
+
+
+
+}
+
+export type LastCheckinSummary = {
+  rpe?: number
+  fatigue?: number
+  pain?: {
+    hasPain: boolean
+    intensity?: number
+    area?: string
+  }
 }
