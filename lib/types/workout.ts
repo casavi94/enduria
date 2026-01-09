@@ -100,3 +100,5 @@ export type LastCheckinSummary = {
     area?: string
   }
 }
+
+

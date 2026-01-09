@@ -4,20 +4,36 @@ import {
   collection,
   setDoc,
   serverTimestamp,
-  getDocs,
-  query,
-  orderBy,
-  limit,
 } from "firebase/firestore"
 import type { CheckIn, WorkoutStatus } from "@/lib/types/workout"
 import { deepClean } from "@/lib/firestore/clean"
+import { recomputeWeeklyAutoStatus } from "@/lib/firestore/weeklyStatus"
 
-/**
- * Guarda un check-in post-entreno y actualiza:
- * - workout.status
- * - workout.lastCheckinSummary + workout.lastCheckinAt (para dashboard instantáneo)
- * - sessions.completed (compatibilidad legacy)
- */
+// ===============================
+// Helpers
+// ===============================
+
+function removeUndefinedDeep<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj
+  if (Array.isArray(obj)) {
+    // @ts-ignore
+    return obj.map(removeUndefinedDeep) as T
+  }
+  if (typeof obj === "object") {
+    const out: any = {}
+    for (const [k, v] of Object.entries(obj as any)) {
+      if (v === undefined) continue
+      out[k] = removeUndefinedDeep(v)
+    }
+    return out
+  }
+  return obj
+}
+
+// ===============================
+// Save check-in
+// ===============================
+
 export async function saveCheckIn(params: {
   uid: string
   workoutId: string
@@ -29,21 +45,19 @@ export async function saveCheckIn(params: {
   if (!workoutId) throw new Error("saveCheckIn: workoutId is missing")
 
   // 1) Guardar check-in (autoId)
-  const ref = doc(
+  const checkinRef = doc(
     collection(db, "users", uid, "workouts", workoutId, "checkins")
   )
 
-  const payload = deepClean({
+  const checkinPayload = deepClean({
     ...checkin,
     completedAt: serverTimestamp(),
   })
 
-  await setDoc(ref, payload)
+  await setDoc(checkinRef, checkinPayload)
 
-  // 2) Actualizar workout (merge) + lastCheckinSummary
-  const workoutRef = doc(db, "users", uid, "workouts", workoutId)
-
-  const lastCheckinSummary = deepClean({
+  // 2) Construir lastCheckinSummary (cache para dashboard)
+  const summaryRaw = {
     rpe: checkin.rpe,
     fatigue: checkin.fatigue,
     pain: {
@@ -51,7 +65,12 @@ export async function saveCheckIn(params: {
       intensity: checkin.pain?.intensity,
       area: checkin.pain?.area,
     },
-  })
+  }
+
+  const lastCheckinSummary = removeUndefinedDeep(summaryRaw)
+
+  // 3) Actualizar workout (merge)
+  const workoutRef = doc(db, "users", uid, "workouts", workoutId)
 
   await setDoc(
     workoutRef,
@@ -59,46 +78,27 @@ export async function saveCheckIn(params: {
       status: checkin.status as WorkoutStatus,
       updatedAt: serverTimestamp(),
 
-      // ✅ nuevo: dashboard instantáneo
+      // cacheado para dashboard instantáneo
       lastCheckinSummary,
       lastCheckinAt: serverTimestamp(),
     }),
     { merge: true }
   )
 
-  // 3) Compatibilidad con sessions (legacy)
+  // 4) Compatibilidad legacy (sessions antiguas)
   const legacySessionRef = doc(db, "users", uid, "sessions", workoutId)
   await setDoc(
     legacySessionRef,
     {
-      completed: checkin.status === "completed" || checkin.status === "modified",
+      completed:
+        checkin.status === "completed" || checkin.status === "modified",
       updatedAt: serverTimestamp(),
     },
     { merge: true }
   )
 
-  return ref.id
-}
+  // 5) ✅ Recalcular estado semanal del usuario
+  await recomputeWeeklyAutoStatus({ uid })
 
-/**
- * Obtiene el último check-in de un workout (por si lo necesitas en detalle)
- */
-export async function getLatestCheckIn(params: {
-  uid: string
-  workoutId: string
-}) {
-  const { uid, workoutId } = params
-  if (!uid || !workoutId) return null
-
-  const q = query(
-    collection(db, "users", uid, "workouts", workoutId, "checkins"),
-    orderBy("completedAt", "desc"),
-    limit(1)
-  )
-
-  const snap = await getDocs(q)
-  if (snap.empty) return null
-
-  const d = snap.docs[0]
-  return { id: d.id, ...d.data() }
+  return checkinRef.id
 }
